@@ -1,0 +1,172 @@
+#!/bin/bash
+
+########################################################
+# WordPress Site Creator Script
+#
+# Requirements: LEMP stack, WP-CLI (from Script 1)
+#
+# Usage: ./create_wp_site.sh <domain> <title> <admin_user> <admin_email> <db_name> <db_user> [ssl_choice]
+# Example: ./create_wp_site.sh example.com "My Site" adminuser admin@example.com mydbname mydbuser y
+########################################################
+
+# Define PHP version to ensure the correct socket is used (must match Script 1)
+PHP_VERSION="8.3"
+
+# 1. Argument Validation
+if [ "$#" -lt 6 ]; then
+    echo "ERROR: Missing arguments." >&2
+    echo "Usage: $0 <domain> <title> <admin_user> <admin_email> <db_name> <db_user> [ssl_choice (y/n)]" >&2
+    exit 1
+fi
+
+DOMAIN=$1
+TITLE=$2
+ADMIN_USER=$3
+ADMIN_EMAIL=$4
+DB_NAME=$5
+DB_USER=$6
+SSL_CHOICE=${7:-n} # Defaults to 'n' if not provided
+
+# Generate a strong, random password for the database user
+DB_PASS=$(openssl rand -base64 16 | tr -dc 'a-zA-Z0-9' | head -c 16)
+WEB_ROOT="/var/www/$DOMAIN"
+NGINX_CONF="/etc/nginx/sites-available/$DOMAIN.conf"
+NGINX_SOCKET="/run/php/php${PHP_VERSION}-fpm.sock"
+
+echo "--------------------------------------"
+echo " WORDPRESS SITE CREATOR"
+echo " Domain: $DOMAIN"
+echo " DB User: $DB_USER"
+echo " DB Name: $DB_NAME"
+echo " Web Root: $WEB_ROOT"
+echo "--------------------------------------"
+
+# 2. Database Setup
+echo "Creating database: $DB_NAME..."
+# Run mysql commands as root via Unix socket
+sudo mysql -e "CREATE DATABASE IF NOT EXISTS ${DB_NAME};"
+sudo mysql -e "CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASS}';"
+sudo mysql -e "GRANT ALL PRIVILEGES ON ${DB_NAME}.* TO '${DB_USER}'@'localhost';"
+sudo mysql -e "FLUSH PRIVILEGES;"
+
+#########################################
+# 3. SETUP WORDPRESS FILES
+#########################################
+
+echo "Setting up WordPress directory..."
+mkdir -p $WEB_ROOT
+cd $WEB_ROOT
+
+echo "Downloading WordPress..."
+# NOTE: Running wp-cli as root is fine for scripting, 
+# but we ensure permissions are set correctly later.
+wp core download --allow-root
+
+echo "Creating wp-config.php..."
+wp config create \
+  --dbname=$DB_NAME \
+  --dbuser=$DB_USER \
+  --dbpass=$DB_PASS \
+  --dbhost=localhost \
+  --allow-root
+
+#########################################
+# 4. NGINX CONFIG
+#########################################
+
+echo "Creating Nginx config at $NGINX_CONF..."
+
+cat > $NGINX_CONF <<EOF
+server {
+    listen 80;
+    server_name $DOMAIN www.$DOMAIN;
+
+    root $WEB_ROOT;
+    index index.php index.html;
+
+    # Basic security headers
+    add_header X-Frame-Options "SAMEORIGIN";
+    add_header X-Content-Type-Options "nosniff";
+    add_header X-XSS-Protection "1; mode=block";
+
+    location / {
+        try_files \$uri \$uri/ /index.php?$args;
+    }
+
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        # Use the specific PHP socket defined by the version
+        fastcgi_pass unix:$NGINX_SOCKET; 
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        include fastcgi_params;
+    }
+
+    # Deny access to hidden files/folders
+    location ~ /\. {
+        deny all;
+    }
+
+    location ~* \.(jpg|jpeg|png|gif|css|js|ico|svg)$ {
+        expires 30d;
+        log_not_found off;
+    }
+}
+EOF
+
+ln -s $NGINX_CONF /etc/nginx/sites-enabled/
+nginx -t && systemctl reload nginx
+
+#########################################
+# 5. WORDPRESS INSTALL
+#########################################
+
+echo "Installing WordPress..."
+
+# Generate a strong, random password for the WP Admin
+ADMIN_PASS_RANDOM=$(openssl rand -base64 12 | tr -dc 'a-zA-Z0-9' | head -c 12)
+
+wp core install \
+  --url="$DOMAIN" \
+  --title="$TITLE" \
+  --admin_user="$ADMIN_USER" \
+  --admin_password="$ADMIN_PASS_RANDOM" \
+  --admin_email="$ADMIN_EMAIL" \
+  --skip-email \
+  --allow-root
+
+#########################################
+# 6. PERMISSIONS
+#########################################
+
+echo "Setting permissions..."
+chown -R www-data:www-data $WEB_ROOT
+find $WEB_ROOT -type d -exec chmod 755 {} \;
+find $WEB_ROOT -type f -exec chmod 644 {} \;
+
+#########################################
+# 7. SSL SETUP (Optional)
+#########################################
+
+if [[ $SSL_CHOICE == "y" || $SSL_CHOICE == "Y" ]]; then
+    echo "Installing SSL with Let's Encrypt..."
+    apt install -y certbot python3-certbot-nginx
+
+    certbot --nginx -d $DOMAIN -d www.$DOMAIN --non-interactive --agree-tos -m $ADMIN_EMAIL
+    
+    echo "SSL enabled successfully."
+else
+    echo "Skipping SSL setup."
+fi
+
+#########################################
+# 8. DONE
+#########################################
+
+echo "--------------------------------------"
+echo "✅ WordPress site setup complete!"
+echo "URL: https://$DOMAIN"
+echo "Admin URL: https://$DOMAIN/wp-admin"
+echo "Database Password: $DB_PASS"
+echo "Admin Username: $ADMIN_USER"
+echo "Admin Password: $ADMIN_PASS_RANDOM"
+echo "--------------------------------------"
