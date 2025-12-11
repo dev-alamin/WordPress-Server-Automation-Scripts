@@ -1,0 +1,129 @@
+#!/bin/bash
+
+########################################################
+# WordPress Server Stack Installer (Ubuntu/LEMP)
+#
+# Changes from original:
+# 1. Added error handling for critical steps.
+# 2. Hardened MariaDB setup: The root password is NOT set 
+#    during installation, relying on UNIX socket authentication 
+#    for root access (best practice).
+# 3. Specified PHP version (8.3) using a PPA for better control.
+########################################################
+
+# Define PHP version
+PHP_VERSION="8.3"
+
+# Function to check for errors
+check_error() {
+    if [ $? -ne 0 ]; then
+        echo "ERROR: $1 failed. Exiting." >&2
+        exit 1
+    fi
+}
+
+echo "--- WORDPRESS SERVER STACK INSTALLER ---"
+
+# 1. Timezone Setup
+read -p "Enter your server timezone (e.g. Asia/Dhaka): " TZ
+
+echo "Setting timezone to $TZ ..."
+timedatectl set-timezone "$TZ"
+check_error "Timezone setup"
+
+echo "Updating system and adding PPA for PHP $PHP_VERSION..."
+apt update -y
+check_error "System update"
+apt upgrade -y
+check_error "System upgrade"
+
+# 2. Install Required Utilities and PHP PPA
+echo "Installing required utilities and PHP PPA..."
+apt install -y curl wget zip unzip software-properties-common lsb-release ca-certificates
+check_error "Utility installation"
+
+# Add Ondrej PHP PPA for version control
+add-apt-repository ppa:ondrej/php -y
+check_error "Adding PHP PPA"
+apt update -y
+
+#########################################
+# 3. INSTALL NGINX
+#########################################
+echo "Installing Nginx..."
+apt install -y nginx
+check_error "Nginx installation"
+systemctl enable nginx
+systemctl start nginx
+
+#########################################
+# 4. INSTALL PHP + NEEDED EXTENSIONS
+#########################################
+echo "Installing PHP $PHP_VERSION and extensions..."
+apt install -y \
+    php${PHP_VERSION}-fpm \
+    php${PHP_VERSION}-mysql \
+    php${PHP_VERSION}-xml \
+    php${PHP_VERSION}-gd \
+    php${PHP_VERSION}-curl \
+    php${PHP_VERSION}-mbstring \
+    php${PHP_VERSION}-zip \
+    php${PHP_VERSION}-intl
+check_error "PHP installation"
+
+systemctl enable php${PHP_VERSION}-fpm
+systemctl start php${PHP_VERSION}-fpm
+
+#########################################
+# 5. INSTALL MARIADB
+#########################################
+echo "Installing MariaDB..."
+apt install -y mariadb-server
+check_error "MariaDB installation"
+systemctl enable mariadb
+systemctl start mariadb
+
+#########################################
+# 6. SECURE MARIADB (Minimal security)
+#########################################
+# NOTE: The root user can authenticate via the Unix socket (sudo mysql).
+# This script only removes the insecure default users/databases.
+echo "Securing MariaDB: Removing default test environment..."
+mysql -e "DELETE FROM mysql.user WHERE User='';"
+mysql -e "DELETE FROM mysql.db WHERE Db='test' OR Db='test_%';"
+mysql -e "FLUSH PRIVILEGES;"
+check_error "MariaDB security steps"
+
+#########################################
+# 7. INSTALL WP-CLI
+#########################################
+echo "Installing WP-CLI..."
+curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+check_error "WP-CLI download"
+chmod +x wp-cli.phar
+mv wp-cli.phar /usr/local/bin/wp
+check_error "WP-CLI setup"
+
+#########################################
+# 8. FIREWALL CONFIGURATION
+#########################################
+echo "Configuring UFW firewall..."
+ufw allow OpenSSH
+ufw allow 'Nginx Full' # Allows 80 and 443
+ufw --force enable
+check_error "UFW configuration"
+
+#########################################
+# 9. FINAL CHECK
+#########################################
+
+echo "--------------------------------------"
+echo "✅ Installation Complete"
+echo "Timezone: $TZ"
+echo "Nginx: Installed"
+echo "PHP-FPM: PHP $PHP_VERSION Installed"
+echo "MariaDB: Installed & Secured (Unix Socket Auth)"
+echo "WP-CLI: Installed"
+echo "Firewall: Enabled (SSH, Nginx Full)"
+echo "--------------------------------------"
+echo "Your server is ready for WordPress site creation."
