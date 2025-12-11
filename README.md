@@ -4,6 +4,8 @@
 
 Automated installation of a complete **LEMP stack** (Linux, Nginx, MariaDB, PHP) and **WordPress site provisioning**, optimized for performance, repeatability, and fast deployments on **Ubuntu**.
 
+**Installing a WordPress Website takes below 10 minutes including cloud instance setup. TESTED.**
+
 This repository contains two essential bash scripts:
 
 1.  `install_stack`: Installs and configures Nginx, PHP 8.3, MariaDB, WP-CLI, firewall, and timezone setup.
@@ -64,9 +66,14 @@ This script utilizes WP-CLI to fully automate a new WordPress installation, incl
     ```bash
     chmod +x create_wp
     ```
-2.  Run the script with the required arguments:
+2.  Run the script with the required arguments: DB & WP Cred will be created automatically.
     ```bash
-    sudo ./create_wp <domain> <title> <admin_user> <admin_email> <db_name> <db_user> [ssl_choice]
+    sudo ./create_wp <domain> <title> <admin_user> <admin_email> <db_name> <db_user> [ssl_choice(y/n)]
+    ```
+
+    **example command, must be replaced by your informations**
+    ```bash
+    sudo ./create_wp example.com "Example Company Site" WP_Admin examplewpmail@example.com example_db example_user y
     ```
 
 ### 📋 Argument Details
